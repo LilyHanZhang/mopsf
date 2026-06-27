@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "mopsf"
+version = "0.1.0"
+description = "Mosaic PSF derivation for JWST/NIRCam imaging (JADES DR5 method)"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "astropy>=5.3",
+    "scipy",
+    "stpsf>=1.2.1",
+    "healpy",
+    "photutils>=1.9",
+    "matplotlib",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["mopsf*"]
