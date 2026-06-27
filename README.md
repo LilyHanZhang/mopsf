@@ -87,6 +87,8 @@ main_dir/
 
 ## Usage
 
+First calibrate your data using the JWST calibration pipeline (https://github.com/zezhong233/JWST-NIRCam-pipeline)
+
 Edit `MAIN_DIR`, `FILTER`, and `PIXEL_SCALE` at the top of `run_mpsf.py`, then:
 
 ```bash

@@ -1,7 +1,6 @@
 """
 run_mpsf.py — example driver script
 ====================================
-Shows how to import and call mopsf as a library in your own .py file.
 
 Usage
 -----

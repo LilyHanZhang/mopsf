@@ -4,15 +4,6 @@ mopsf.inject
 Generate HEALPix injection grids and inject stpsf PSFs into mock
 cal.fits exposures ready for Stage 3 + resample.
 
-Why we skip Stage 2
-~~~~~~~~~~~~~~~~~~~
-Stage 2 (rate → cal) applies flat-fielding, flux calibration, background
-subtraction, and wisp subtraction.  None of these steps affect the PSF
-shape: they operate on the amplitude and baseline of the science signal,
-not on the spatial distribution of flux from a point source.  The mock
-SCI arrays contain only synthetic PSFs on a zero background, so there is
-nothing to flat-field or flux-calibrate.
-
 What we *do* need from the real cal.fits is:
   - the SCI header (WCS) so Stage 3 can align exposures
   - the DQ extension so outlier rejection works correctly
@@ -116,6 +107,8 @@ def inject_psf_at_position(
     The PSF is shifted to the correct sub-pixel phase before stamping
     so that the ePSF builder sees a well-sampled range of sub-pixel
     offsets across injection sites.
+
+    Boundaries are handled.
 
     Parameters
     ----------

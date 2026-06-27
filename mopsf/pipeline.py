@@ -26,9 +26,11 @@ import logging
 import os
 import shutil
 from pathlib import Path
+import sys
 
 log = logging.getLogger(__name__)
-
+path = Path('~').expanduser() #the path where JWST-NIRCam-pipeline is located, change if needed
+sys.path.append(str(path))
 
 def run_pipeline(
     mock_files: list[str],
@@ -79,7 +81,7 @@ def run_pipeline(
         If no output mosaic FITS is found after the run.
     """
     try:
-        from pipeline import pipeline as _Pipeline
+        from JWST-NIRCam-pipeline.pipeline import pipeline as _Pipeline
     except ImportError as exc:
         raise ImportError(
             "Could not import 'pipeline'.  "
@@ -105,8 +107,8 @@ def run_pipeline(
         lw_dir    = lw_dir,
         asn_dir   = asn_dir,
         wisp_dir  = wisp_dir,
-        stage0_dir= str(staged_cal_dir),  # unused but required by API
-        stage1_dir= str(staged_cal_dir),  # unused but required by API
+        stage0_dir= str(staged_cal_dir),  # unused
+        stage1_dir= str(staged_cal_dir),  # unused
         stage2_dir= str(staged_cal_dir),  # mock cal.fits live here
         stage3_dir= stage3_dir,
         mosaic_dir= mosaic_dir,
