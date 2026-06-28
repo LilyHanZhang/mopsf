@@ -42,7 +42,7 @@ drizzle-induced PSF changes are captured automatically.
 ## Installation
 
 ```bash
-git clone <this repo>
+git clone https://github.com/LilyHanZhang/mopsf.git
 cd mopsf
 pip install -e .
 ```
