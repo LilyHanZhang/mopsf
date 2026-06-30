@@ -22,6 +22,7 @@ used on the science data.
 from __future__ import annotations
 
 import glob
+import importlib
 import logging
 import os
 import shutil
@@ -43,10 +44,10 @@ def run_pipeline(
     pixfrac: float = 0.75,
 ) -> str:
     """
-    Run Stage 3 (alignment + outlier rejection) → resample (drizzle) on
+    Run resample (drizzle) on
     mock-injected cal.fits files.
 
-    Stage 2 is **not** run; see module docstring for rationale.
+    Stage 2 & 3 are **not** run; see module docstring for rationale.
 
     Parameters
     ----------
@@ -81,7 +82,9 @@ def run_pipeline(
         If no output mosaic FITS is found after the run.
     """
     try:
-        from JWST-NIRCam-pipeline.pipeline import pipeline as _Pipeline
+        #from JWST-NIRCam-pipeline.pipeline import pipeline as _Pipeline
+        pipeline_module = importlib.import_module('JWST-NIRCam-pipeline.pipeline')
+        _Pipeline = pipeline_module.pipeline
     except ImportError as exc:
         raise ImportError(
             "Could not import 'pipeline'.  "
@@ -90,11 +93,11 @@ def run_pipeline(
         ) from exc
 
     for d in (stage3_dir, mosaic_dir):
-        Path(d).mkdir(parents=True, exist_ok=True)
-
+        Path(d).mkdir(parents=True, exist_ok=True)        
     # The pipeline expects its input cal.fits in stage2_dir.
     # We use stage3_dir as a staging area so we don't mix mock and real files.
-    staged_cal_dir = Path(stage3_dir) / "staged_cal"
+
+    staged_cal_dir = Path(mosaic_dir) / "staged_cal"
     staged_cal_dir.mkdir(parents=True, exist_ok=True)
     staged: list[str] = []
     for src in mock_files:
@@ -107,10 +110,10 @@ def run_pipeline(
         lw_dir    = lw_dir,
         asn_dir   = asn_dir,
         wisp_dir  = wisp_dir,
-        stage0_dir= str(staged_cal_dir),  # unused
-        stage1_dir= str(staged_cal_dir),  # unused
-        stage2_dir= str(staged_cal_dir),  # mock cal.fits live here
-        stage3_dir= stage3_dir,
+        #stage0_dir= str(staged_cal_dir),  # unused
+        #stage1_dir= str(staged_cal_dir),  # unused
+        #stage2_dir= str(staged_cal_dir),  # mock cal.fits live here
+        stage3_dir= str(staged_cal_dir),
         mosaic_dir= mosaic_dir,
         filter    = filter_name,
     )
@@ -118,8 +121,8 @@ def run_pipeline(
     # ── Stage 3: astrometric alignment + outlier rejection ────────────────────
     # This reads from stage2_dir (our staged mock cal.fits) and writes
     # aligned, outlier-flagged files to stage3_dir.
-    log.info("Stage 3 (alignment + outlier rejection) on %d mock files …", len(staged))
-    pl.stage3_part3()
+    #log.info("Stage 3 (alignment + outlier rejection) on %d mock files …", len(staged))
+    #pl.stage3_part3()
 
     # ── Resample: drizzle with same pixfrac as real data ──────────────────────
     log.info("Resample (drizzle) with pixfrac=%.2f …", pixfrac)

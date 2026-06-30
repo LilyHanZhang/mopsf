@@ -30,20 +30,20 @@ from mopsf.measure   import build_epsf, find_mosaic
 # CONFIGURATION — edit these paths and settings
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-MAIN_DIR    = "/path/to/main_dir"
-FILTER      = "F277W"
-PIXEL_SCALE = 0.063    # arcsec/px — LW: 0.063, SW: 0.031
+MAIN_DIR    = "/mnt/data/JWST/WFSS/J0100-15157/direct_image_EIGER/"
+MPSF_DIR    = MAIN_DIR + 'mpsf/'
+FILTER      = "F115W"
+PIXEL_SCALE = 0.031    # arcsec/px — LW: 0.063, SW: 0.031
 
-# Input: real Stage 2 cal.fits files
-CAL_FILES = sorted(glob.glob(os.path.join(MAIN_DIR, "stage2", f"*{FILTER.lower()}*_cal.fits")))
+# Input: real Stage 3 cal.fits files
+CAL_FILES = sorted(glob.glob(os.path.join(MAIN_DIR, f"direct_image_{FILTER}", "stage3", f"*{FILTER.lower()}*_cal.fits")))
 
 # Output dirs (created automatically)
-# NOTE: no mpsf_stage2 — Stage 2 is intentionally skipped for mock frames.
-# The mock cal.fits go directly into Stage 3 (alignment + outlier rejection).
-INJECTED_DIR = os.path.join(MAIN_DIR, "mpsf_injected")
-STAGE3_DIR   = os.path.join(MAIN_DIR, "mpsf_stage3")
-MOSAIC_DIR   = os.path.join(MAIN_DIR, "mpsf_mosaic")
-OUTPUT_DIR   = os.path.join(MAIN_DIR, "mpsf_output")
+# The mock cal.fits go directly into Resampling.
+INJECTED_DIR = os.path.join(MPSF_DIR, "mpsf_injected")
+STAGE3_DIR   = os.path.join(MPSF_DIR, "mpsf_stage3")
+MOSAIC_DIR   = os.path.join(MPSF_DIR, "mpsf_mosaic")
+OUTPUT_DIR   = os.path.join(MPSF_DIR, "mpsf_output")
 
 # Pipeline inputs (same as real-data run)
 LW_DIR   = os.path.join(MAIN_DIR, "stage2")
