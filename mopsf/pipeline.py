@@ -30,8 +30,9 @@ from pathlib import Path
 import sys
 
 log = logging.getLogger(__name__)
-path = Path('~').expanduser() #the path where JWST-NIRCam-pipeline is located, change if needed
-sys.path.append(str(path))
+pipeline_dir = Path('~/JWST-NIRCam-pipeline').expanduser()
+if str(pipeline_dir) not in sys.path:
+    sys.path.insert(0, str(pipeline_dir))
 
 def run_pipeline(
     mock_files: list[str],
@@ -82,8 +83,10 @@ def run_pipeline(
         If no output mosaic FITS is found after the run.
     """
     try:
-        #from JWST-NIRCam-pipeline.pipeline import pipeline as _Pipeline
-        pipeline_module = importlib.import_module('JWST-NIRCam-pipeline.pipeline')
+        pipeline_path = Path('~/JWST-NIRCam-pipeline/pipeline.py').expanduser()
+        spec = importlib.util.spec_from_file_location("pipeline", pipeline_path)
+        pipeline_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(pipeline_module)
         _Pipeline = pipeline_module.pipeline
     except ImportError as exc:
         raise ImportError(
@@ -92,11 +95,11 @@ def run_pipeline(
             "and add it to PYTHONPATH."
         ) from exc
 
-    for d in (stage3_dir, mosaic_dir):
-        Path(d).mkdir(parents=True, exist_ok=True)        
+    #for d in (stage3_dir, mosaic_dir):
+    #    Path(d).mkdir(parents=True, exist_ok=True)        
     # The pipeline expects its input cal.fits in stage2_dir.
     # We use stage3_dir as a staging area so we don't mix mock and real files.
-
+    Path(mosaic_dir).mkdir(parents=True, exist_ok=True)
     staged_cal_dir = Path(mosaic_dir) / "staged_cal"
     staged_cal_dir.mkdir(parents=True, exist_ok=True)
     staged: list[str] = []
@@ -117,6 +120,10 @@ def run_pipeline(
         mosaic_dir= mosaic_dir,
         filter    = filter_name,
     )
+    #os.makedirs(pl.lw_dir, exist_ok=True)
+    os.makedirs(pl.asn_dir, exist_ok=True)
+    os.makedirs(pl.wisp_dir, exist_ok=True)
+    os.makedirs(pl.stage3_dir, exist_ok=True)
 
     # ── Stage 3: astrometric alignment + outlier rejection ────────────────────
     # This reads from stage2_dir (our staged mock cal.fits) and writes
@@ -126,7 +133,7 @@ def run_pipeline(
 
     # ── Resample: drizzle with same pixfrac as real data ──────────────────────
     log.info("Resample (drizzle) with pixfrac=%.2f …", pixfrac)
-    pl.resample(pixfrac=pixfrac)
+    pl.resample(pixfrac=pixfrac,in_suffix = "a3001_crf_mpsf")
 
     # Verify output
     mosaics = [
