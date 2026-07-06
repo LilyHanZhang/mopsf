@@ -43,6 +43,7 @@ def run_pipeline(
     stage3_dir: str,
     mosaic_dir: str,
     pixfrac: float = 0.75,
+    pixel_scale_mosaic: float = 0.02
 ) -> str:
     """
     Run resample (drizzle) on
@@ -133,7 +134,7 @@ def run_pipeline(
 
     # ── Resample: drizzle with same pixfrac as real data ──────────────────────
     log.info("Resample (drizzle) with pixfrac=%.2f …", pixfrac)
-    pl.resample(pixfrac=pixfrac,in_suffix = "a3001_crf_mpsf")
+    pl.resample(pixfrac=pixfrac,pixel_scale = pixel_scale_mosaic, in_suffix = "a3001_crf_mpsf")
 
     # Verify output
     mosaics = [

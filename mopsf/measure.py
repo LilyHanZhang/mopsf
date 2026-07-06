@@ -26,6 +26,8 @@ import astropy.units as u
 import healpy as hp
 
 from photutils.psf import EPSFBuilder, extract_stars
+from psfr.util import oversampled2regular
+from lenstronomy.Util import util, kernel_util, image_util
 
 from .inject import healpy_skycoords_in_footprint  # re-use grid logic
 
@@ -66,13 +68,15 @@ def load_mosaic(
             wcs = WCS(hdul["SCI"].header)
             wht = (hdul["WHT"].data.astype(np.float64)
                    if "WHT" in ext_names else np.ones_like(sci))
+            pixel_scale = np.sqrt(hdul["SCI"].header['PIXAR_A2']) #arcsec/pixel
         else:
             sci = hdul[0].data.astype(np.float64)
             wcs = WCS(hdul[0].header)
             wht = np.ones_like(sci)
+            pixel_scale = np.sqrt(hdul[0].header['PIXAR_A2']) #arcsec/pixel
 
     log.info("Loaded mosaic %s — shape %s", Path(mosaic_path).name, sci.shape)
-    return sci, wht, wcs
+    return sci, wht, wcs, pixel_scale
 
 
 def find_mosaic(mosaic_dir: str, filter_name: str) -> str:
@@ -97,8 +101,8 @@ def find_mosaic(mosaic_dir: str, filter_name: str) -> str:
         If no suitable file is found.
     """
     for pat in [
-        os.path.join(mosaic_dir, f"*{filter_name.lower()}*i2d*.fits"),
-        os.path.join(mosaic_dir, f"*{filter_name.upper()}*i2d*.fits"),
+        os.path.join(mosaic_dir, f"*{filter_name.lower()}*mosaic_resample.fits"),
+        os.path.join(mosaic_dir, f"*{filter_name.upper()}*mosaic_resample.fits"),
         os.path.join(mosaic_dir, "*.fits"),
     ]:
         hits = sorted(f for f in glob.glob(pat)
@@ -133,7 +137,7 @@ def _filter_low_flux(
     peaks = np.array(peaks)
     stars_tbl = stars_tbl.copy()
     stars_tbl["peak"] = peaks
-    threshold = min_flux_frac * np.median(peaks)
+    threshold = min_flux_frac * np.nanmedian(peaks)
     good = peaks >= threshold
     n_bad = (~good).sum()
     if n_bad:
@@ -202,7 +206,7 @@ def build_epsf(
         raise ValueError(f"cutout_size must be odd, got {cutout_size}")
 
     # ── load mosaic ──────────────────────────────────────────────────────────
-    sci, wht, wcs = load_mosaic(mosaic_path)
+    sci, wht, wcs, pixel_scale = load_mosaic(mosaic_path)
     ny, nx = sci.shape
 
     # ── known injection positions ────────────────────────────────────────────
@@ -238,19 +242,22 @@ def build_epsf(
     # recentering_func=None: positions are exact (known HEALPix centres),
     # so recentering would only inject centroid noise.
     builder = EPSFBuilder(
-        oversampling     = oversampling,
-        maxiters         = max_iters,
-        progress_bar     = True,
-        smoothing_kernel = smoothing_kernel,
-        recentering_func = None,
+        oversampling         = oversampling,
+        maxiters             = max_iters,
+        progress_bar         = True,
+        smoothing_kernel     = smoothing_kernel,
+        recentering_maxiters = 0,
     )
-    epsf, fitted_stars = builder(stars)
-    log.info("ePSF built.  Shape: %s", epsf.data.shape)
+    epsf_super, fitted_stars = builder(stars)
+    epsf = kernel_util.degrade_kernel(epsf_super.data, oversampling)
+    epsf = kernel_util.cut_psf(epsf, cutout_size)
+    epsf = epsf / np.sum(epsf)
+    log.info("ePSF built.  Shape: %s", epsf.shape)
 
     # ── save ePSF ────────────────────────────────────────────────────────────
     if save_path is not None:
         _save_epsf(epsf, filter_name, oversampling, cutout_size,
-                   len(stars_tbl), save_path)
+                   len(stars_tbl), save_path, pixel_scale=pixel_scale)
 
     if save_stars is not None:
         save_stars_path = Path(save_stars)
@@ -262,7 +269,7 @@ def build_epsf(
 
 
 def _save_epsf(epsf, filter_name: str, oversampling: int,
-               cutout_size: int, n_stars: int, path: str) -> None:
+               cutout_size: int, n_stars: int, path: str, pixel_scale: float) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     hdr = fits.Header()
@@ -272,5 +279,6 @@ def _save_epsf(epsf, filter_name: str, oversampling: int,
     hdr["NSTARS"]   = (n_stars,      "Number of stars used")
     hdr["METHOD"]   = ("HEALPix injection + photutils EPSFBuilder", "")
     hdr["COMMENT"]  = "mPSF following JADES DR5 (arXiv:2601.15954)"
-    fits.writeto(path, epsf.data.astype(np.float32), hdr, overwrite=True)
+    hdr["PIXELSC"] = (pixel_scale, "Pixel scale (arcsec/pixel)")
+    fits.writeto(path, epsf.astype(np.float32), hdr, overwrite=True)
     log.info("ePSF written → %s", path)
