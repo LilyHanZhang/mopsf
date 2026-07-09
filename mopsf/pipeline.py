@@ -28,11 +28,36 @@ import os
 import shutil
 from pathlib import Path
 import sys
+from datetime import datetime
+from astropy.io import fits 
+import numpy as np
+import math
 
 log = logging.getLogger(__name__)
 pipeline_dir = Path('~/JWST-NIRCam-pipeline').expanduser()
 if str(pipeline_dir) not in sys.path:
     sys.path.insert(0, str(pipeline_dir))
+
+def cal_rotation(h, pixel_scale):
+    '''
+    extracted from https://github.com/zezhong233/JWST-NIRCam-pipeline 
+    calculate the rotation for a mosaic in image frame. 
+    ---
+    parameters:
+    h: str
+    header of any exposure or mosaic which contributes to your final mosaic or mosaic you want to reproduce.
+    ---
+    return
+    rotation: float
+    the rotation in image frame.
+    '''
+    pcs = np.array([[ h['CD1_1'],  h['CD1_2']], [h['CD2_1'], h['CD2_2']]])
+    cd = np.array([[pixel_scale/3600, 0],[0, pixel_scale / 3600]])
+    cd_rot=np.dot(pcs,cd)
+    w1 = cd_rot[0,0]
+    w2 = cd_rot[1,0]
+    rotation = math.atan(-w2/w1)/math.pi*180
+    return rotation
 
 def run_pipeline(
     mock_files: list[str],
@@ -42,6 +67,8 @@ def run_pipeline(
     wisp_dir: str,
     stage3_dir: str,
     mosaic_dir: str,
+    rot_header = None,
+    output_shape = None,
     pixfrac: float = 0.75,
     pixel_scale_mosaic: float = 0.02
 ) -> str:
@@ -121,6 +148,10 @@ def run_pipeline(
         mosaic_dir= mosaic_dir,
         filter    = filter_name,
     )
+    start = datetime.now()
+    rotation = None
+    if rot_header is None:
+        rotation = cal_rotation(rot_header, pixel_scale_mosaic)
     #os.makedirs(pl.lw_dir, exist_ok=True)
     os.makedirs(pl.asn_dir, exist_ok=True)
     os.makedirs(pl.wisp_dir, exist_ok=True)
@@ -134,7 +165,10 @@ def run_pipeline(
 
     # ── Resample: drizzle with same pixfrac as real data ──────────────────────
     log.info("Resample (drizzle) with pixfrac=%.2f …", pixfrac)
-    pl.resample(pixfrac=pixfrac,pixel_scale = pixel_scale_mosaic, in_suffix = "tweakreg_mpsf")
+    pl.resample(pixfrac=pixfrac, pixel_scale = pixel_scale_mosaic, in_suffix = "tweakreg_mpsf",
+                rotation = rotation, outputshape = output_shape)
+    end = datetime.now()
+    print(f"--Resample for F{filter_name} took {end-start}.--")
 
     # Verify output
     mosaics = [

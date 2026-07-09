@@ -15,7 +15,7 @@ drizzle-induced PSF changes are captured automatically.
 1. **stpsf** computes a per-exposure optical PSF for each detector + filter.
    - IPC (`add_ipc=False`) could be disabled if it is already corrected in Stage 1 ramp fitting, since including it in the model would double-count the effect and make the PSF artificially broad.
    - IPC (`add_ipc=True`) is included by default.
-   - Charge diffusion is left at the stpsf default — it is a real physical effect present in the data and is not corrected out.
+   - Charge diffusion is left at the stpsf default — it is not corrected out in the image calibration pipeline.
 
 2. Synthetic point sources are injected at **HEALPix grid positions**
    (NSIDE=4096, ~6 sites per NIRCam module) into zero-valued copies of
@@ -89,6 +89,8 @@ main_dir/
 
 First calibrate your data using the JWST calibration pipeline (https://github.com/zezhong233/JWST-NIRCam-pipeline)
 
+You could directly use `multi_processing.py` in the pipeline: change the CRDS, Wisp template directory (downloaded at https://stsci.box.com/s/1bymvf1lkrqbdn9rnkluzqk30e8o2bne) & SCI directory to your own.
+
 Edit `MAIN_DIR`, `FILTER`, and `PIXEL_SCALE` at the top of `run_mpsf.py`, then:
 
 ```bash
@@ -118,6 +120,8 @@ epsf, fitted_stars, stars_tbl = build_epsf(
     save_path   = "mpsf_output/F277W_mpsf.fits",
 )
 ```
+
+A more comprehensive procedure is included in `run_mpsf.ipynb`.
 
 ---
 
