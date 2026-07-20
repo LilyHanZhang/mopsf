@@ -1,8 +1,7 @@
 # mopsf — Mosaic PSF
 
 Derives the effective **mosaic PSF (mPSF)** for JWST/NIRCam imaging,
-following the method described in Johnson et al. (2026), JADES DR5
-([arXiv:2601.15954](https://arxiv.org/abs/2601.15954), §3.4).
+following the method described in Ji et al. (2024) (https://doi.org/10.3847/1538-4357/ad6e7f, Appendix A) & Johnson et al. (2026), JADES DR5 ([arXiv:2601.15954](https://arxiv.org/abs/2601.15954), §3.4).
 
 ---
 
@@ -16,6 +15,7 @@ drizzle-induced PSF changes are captured automatically.
    - IPC (`add_ipc=False`) could be disabled if it is already corrected in Stage 1 ramp fitting, since including it in the model would double-count the effect and make the PSF artificially broad.
    - IPC (`add_ipc=True`) is included by default.
    - Charge diffusion is left at the stpsf default — it is not corrected out in the image calibration pipeline.
+   - Detector position and optical path difference are considered.
 
 2. Synthetic point sources are injected at **HEALPix grid positions**
    (NSIDE=4096, ~6 sites per NIRCam module) into zero-valued copies of
@@ -106,9 +106,8 @@ from mopsf.pipeline  import run_pipeline
 from mopsf.measure   import build_epsf, find_mosaic
 
 # Step 1 — build stpsf PSFs and inject into mock cal.fits
-psf_cache  = build_psf_cache(filter_name="F277W", cal_files=cal_files,
-                              pixel_scale=0.063, add_ipc=False)
-mock_files = make_mock_exposures(cal_files, psf_cache, "F277W", out_dir="mpsf_injected/")
+
+mock_files = make_mock_exposures(cal_files = cal_files, filter_name = "F277W", out_dir = "mpsf_injected/")
 
 # Step 2 — Stage 3 + resample (Stage 2 is skipped)
 run_pipeline(mock_files, filter_name="277W", ..., pixfrac=0.75)
@@ -142,6 +141,8 @@ mopsf/
 ---
 
 ## Reference
+
+Ji, Z., Williams, C. C., Tacchella, S., et al. 2024, ApJ, 974, 135, doi: 10.3847/1538-4357/ad6e7f
 
 Johnson et al. (2026), *The JWST Advanced Deep Extragalactic Survey (JADES):
 Fifth Data Release*, arXiv:2601.15954

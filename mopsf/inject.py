@@ -2,16 +2,27 @@
 mopsf.inject
 ------------
 Generate HEALPix injection grids and inject stpsf PSFs into mock
-cal.fits exposures ready for Stage 3 + resample.
+cal.fits exposures ready for resample.
 
-What we *do* need from the real cal.fits is:
-  - the SCI header (WCS) so Stage 3 can align exposures
-  - the DQ extension so outlier rejection works correctly
-  - the ERR extension so drizzle can weight by inverse variance
+What we need from the real cal.fits:
+  - SCI header  : WCS (for Stage 3 alignment) and PIXAR_A2 (pixel scale)
+  - Primary header : DETECTOR, DATE-BEG (for OPD selection)
+  - DQ extension : outlier rejection in Stage 3
+  - ERR extension : drizzle inverse-variance weighting
 
-We therefore borrow these extensions from the real cal.fits, replace
-the SCI data with injected PSFs, and feed the result directly into
-Stage 3.  Stage 2 is bypassed entirely.
+The SCI data is replaced with injected PSFs; all other extensions are
+copied unchanged.  Stage 2 is bypassed entirely (flat-field, flux cal,
+and wisp subtraction do not affect PSF shape).
+
+Per-site PSF computation
+~~~~~~~~~~~~~~~~~~~~~~~~
+Unlike a simple per-detector cache, each injection site gets its own
+PSF computed at:
+  - its exact detector position (field-dependent aberrations)
+  - the OPD snapshot closest to DATE-BEG (wavefront drift over time)
+  - the pixel scale from sqrt(PIXAR_A2) in the SCI header
+
+This matches the approach of the JADES DR5 mPSF pipeline.
 """
 
 from __future__ import annotations
@@ -26,6 +37,7 @@ from astropy.wcs import WCS
 from astropy.coordinates import SkyCoord
 import astropy.units as u
 from scipy.ndimage import shift as ndimage_shift
+from .psf_model import build_stpsf_psf, pixel_scale_from_header
 
 log = logging.getLogger(__name__)
 
@@ -33,7 +45,7 @@ DEFAULT_NSIDE       = 2**12   # ~6 injection sites per NIRCam module
 DEFAULT_PEAK_COUNTS = 1000.0  # arbitrary injected peak (same units as SCI)
 
 
-# ── HEALPix grid ─────────────────────────────────────────────────────────────
+# ── HEALPix grid ──────────────────────────────────────────────────────────────
 
 def healpy_skycoords_in_footprint(
     wcs: WCS,
@@ -41,7 +53,7 @@ def healpy_skycoords_in_footprint(
     naxis2: int,
     nside: int = DEFAULT_NSIDE,
     edge_pad: int = 36,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[SkyCoord, np.ndarray, np.ndarray]:
     """
     Return HEALPix pixel centres (RING scheme) inside a detector footprint.
 
@@ -54,14 +66,14 @@ def healpy_skycoords_in_footprint(
     nside : int
         HEALPix NSIDE parameter.  Default 4096 ≈ 6 sites per module.
     edge_pad : int
-        Exclude sites closer than this many pixels to the image edge,
-        so that PSF cutouts don't run off the detector.
+        Exclude sites closer than this many pixels to the image edge
+        so that PSF stamps don't run off the detector.
 
     Returns
     -------
     coords : SkyCoord
-    x_pix  : ndarray of float
-    y_pix  : ndarray of float
+    x_pix  : ndarray of float   (image pixel x coordinates)
+    y_pix  : ndarray of float   (image pixel y coordinates)
     """
     npix  = hp.nside2npix(nside)
     ipix  = np.arange(npix)
@@ -91,8 +103,7 @@ def healpy_skycoords_in_footprint(
     )
     return coords[in_frame], x_pix[in_frame], y_pix[in_frame]
 
-
-# ── PSF injection ─────────────────────────────────────────────────────────────
+# ── PSF injection ──────────────────────────────────────────────────────────────
 
 def inject_psf_at_position(
     sci: np.ndarray,
@@ -104,7 +115,7 @@ def inject_psf_at_position(
     """
     Inject a PSF stamp centred at sub-pixel position (x_cen, y_cen).
 
-    The PSF is shifted to the correct sub-pixel phase before stamping
+     The PSF is shifted to the correct sub-pixel phase before stamping
     so that the ePSF builder sees a well-sampled range of sub-pixel
     offsets across injection sites.
 
@@ -113,7 +124,7 @@ def inject_psf_at_position(
     Parameters
     ----------
     sci : ndarray
-        2-D science array (modified copy is returned; input not changed).
+        2-D science array.  A copy is returned; input is not modified.
     psf : ndarray
         2-D PSF stamp, shape (fov_pixels, fov_pixels).  Assumed normalised.
     x_cen, y_cen : float
@@ -132,7 +143,7 @@ def inject_psf_at_position(
     hh, hw = ph // 2, pw // 2
 
     ix, iy = int(round(x_cen)), int(round(y_cen))
-    dx = x_cen - ix
+    dx = x_cen - ix   # sub-pixel remainder
     dy = y_cen - iy
 
     psf_shifted = ndimage_shift(psf, shift=(dy, dx), order=3,
@@ -142,8 +153,10 @@ def inject_psf_at_position(
         return sci
     psf_scaled = psf_shifted * (peak / psf_max)
 
+    # Image bounding box
     x0, x1 = ix - hw,      ix + hw + 1
     y0, y1 = iy - hh,      iy + hh + 1
+    # Corresponding PSF crop
     px0     = max(0, -x0);  px1 = pw - max(0, x1 - w)
     py0     = max(0, -y0);  py1 = ph - max(0, y1 - h)
     x0      = max(0,  x0);  x1  = min(w, x1)
@@ -154,49 +167,57 @@ def inject_psf_at_position(
     return sci
 
 
-# ── mock exposure generation ──────────────────────────────────────────────────
+# ── mock exposure generation ───────────────────────────────────────────────────
 
 def make_mock_exposures(
     cal_files: list[str],
-    psf_cache: dict[tuple[str, str], np.ndarray],
     filter_name: str,
     out_dir: str,
     nside: int           = DEFAULT_NSIDE,
     peak_counts: float   = DEFAULT_PEAK_COUNTS,
-    add_ipc: bool        = False,
+    fov_pixels: int      = 71,
+    oversample: int      = 4,
+    add_ipc: bool        = True,
+    charge_diffusion_sigma: float | None = None,
+    save_psf_dir: str | None = None,
 ) -> list[str]:
     """
     Build mock cal.fits files ready for direct input into Stage 3.
 
-    For each real cal.fits, the SCI array is replaced with synthetic
-    PSFs injected at HEALPix grid positions.  All other extensions
-    (SCI header / WCS, DQ, ERR, AREA, ASDF) are copied unchanged from
-    the real cal.fits so that Stage 3 astrometric alignment, outlier
-    rejection, and drizzle weighting all work correctly.
+    For each cal.fits and each HEALPix injection site, a separate stpsf
+    PSF is computed at:
+      - the detector pixel position of the injection site (from WCS projection)
+      - the pixel scale from ``sqrt(PIXAR_A2)`` in the SCI header
+      - the OPD snapshot closest to ``DATE-BEG`` in the primary header
 
-    Stage 2 (flat-field, flux calibration, wisp subtraction) is
-    **not** run on the mock files: those steps do not affect PSF shape
-    and would be meaningless on a zero-background synthetic array.
+    The SCI array is replaced with the injected PSFs on a zero background.
+    All other extensions (WCS header, DQ, ERR) are copied unchanged so
+    pipeline.resample can drizzle the mock frames identically to real data.
 
     Parameters
     ----------
     cal_files : list of str
-        Paths to real Stage 2 cal.fits files.  These supply the WCS,
-        DQ, and ERR data; their SCI pixels are discarded.
-    psf_cache : dict
-        ``{(filter_name, detector): psf_array}`` from
-        :func:`mopsf.psf_model.build_psf_cache`.
+        Paths to real Stage 3 cal.fits files.
     filter_name : str
-        NIRCam filter (written into the output header for provenance).
+        NIRCam filter string (written to output header for provenance).
     out_dir : str
-        Directory to write mock cal.fits into.
+        Directory to write mock cal.fits files into.
     nside : int
         HEALPix NSIDE for the injection grid.
     peak_counts : float
-        Injected peak value per source (arbitrary units, same as SCI).
+        Injected peak value per source (same units as the SCI array).
+    fov_pixels : int
+        PSF stamp side length in detector pixels passed to stpsf.
+    oversample : int
+        Internal oversampling factor passed to stpsf.
     add_ipc : bool
-        Recorded in the output header for provenance.  Should match the
-        ``add_ipc`` setting used in :func:`mopsf.psf_model.build_stpsf_psf`.
+        Include IPC in the stpsf model.  Set False if IPC was corrected
+        in Stage 1.
+    charge_diffusion_sigma : float or None
+        Override charge-diffusion kernel width (arcsec).
+    save_psf_dir : str or None
+        If given, save each per-site PSF as a FITS file in this directory
+        (useful for diagnostics).
 
     Returns
     -------
@@ -206,47 +227,92 @@ def make_mock_exposures(
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    if save_psf_dir is not None:
+        Path(save_psf_dir).mkdir(parents=True, exist_ok=True)
+
     written: list[str] = []
 
     for cal_path in cal_files:
         cal_path = Path(cal_path)
         log.info("Building mock exposure from %s", cal_path.name)
 
+        # ── read header metadata ───────────────────────────────────────────
         with fits.open(cal_path) as hdul:
             phdr     = hdul[0].header
-            det      = phdr.get("DETECTOR", "NRCA1").upper()
             sci_hdr  = hdul["SCI"].header
             sci_data = hdul["SCI"].data.astype(np.float64)
 
+        detector = phdr.get("DETECTOR", "NRCA1").upper()
+        obs_date = phdr.get("DATE-BEG", phdr.get("DATE-OBS", "2022-01-01T00:00:00"))
+
+        # Pixel scale from PIXAR_A2 (exact, distortion-aware)
+        pixel_scale = pixel_scale_from_header(sci_hdr)
+        log.info(
+            "  detector=%s  date=%s  pixel_scale=%.5f arcsec/px",
+            detector, obs_date, pixel_scale,
+        )
+
         wcs    = WCS(sci_hdr)
         ny, nx = sci_data.shape
-        key    = (filter_name, det)
 
-        if key not in psf_cache:
-            log.warning("No PSF in cache for %s — skipping %s", key, cal_path.name)
-            continue
-
-        psf_arr = psf_cache[key]
-        coords, x_pos, y_pos = healpy_skycoords_in_footprint(wcs, nx, ny, nside)
-
+        # ── HEALPix injection sites ────────────────────────────────────────
+        coords, x_pos, y_pos = healpy_skycoords_in_footprint(
+            wcs, nx, ny, nside=nside
+        )
         if len(x_pos) == 0:
-            log.warning("No HEALPix sites in footprint of %s — skipping", cal_path.name)
+            log.warning(
+                "No HEALPix sites in footprint of %s — skipping", cal_path.name
+            )
             continue
+        log.info("  %d injection sites", len(x_pos))
 
-        log.info("  Injecting %d sources", len(x_pos))
+        # ── per-site PSF injection ─────────────────────────────────────────
         mock_sci = np.zeros_like(sci_data)
-        for xc, yc in zip(x_pos, y_pos):
-            mock_sci = inject_psf_at_position(mock_sci, psf_arr, xc, yc, peak_counts)
 
-        # Copy real cal.fits intact; only replace the SCI pixel array.
-        # WCS, DQ, ERR, and all other extensions are kept so Stage 3
-        # can align and drizzle the mock frames identically to the real data.
+        for site_idx, (xc, yc) in enumerate(zip(x_pos, y_pos)):
+            # Project sky coord → detector pixel position for stpsf
+            # WCS pixel coords (0-indexed) map directly to detector coords
+            det_x = float(xc)
+            det_y = float(yc)
+
+            # Optional save path for this site's PSF
+            psf_save = None
+            if save_psf_dir is not None:
+                stem = cal_path.stem
+                psf_save = (
+                    Path(save_psf_dir)
+                    / f"{stem}_site{site_idx:03d}_x{int(det_x)}_y{int(det_y)}.fits"
+                )
+
+            # Compute PSF for this exact position, date, and pixel scale
+            psf_arr = build_stpsf_psf(
+                filter_name          = filter_name,
+                detector             = detector,
+                detector_position    = (det_x, det_y),
+                obs_date             = obs_date,
+                pixel_scale          = pixel_scale,
+                fov_pixels           = fov_pixels,
+                oversample           = oversample,
+                add_ipc              = add_ipc,
+                charge_diffusion_sigma = charge_diffusion_sigma,
+                save_path            = psf_save,
+            )
+
+            mock_sci = inject_psf_at_position(
+                mock_sci, psf_arr, xc, yc, peak_counts
+            )
+
+        # ── write mock cal.fits ────────────────────────────────────────────
+        # Replace SCI data only; keep WCS header, DQ, ERR, and all other
+        # extensions so Stage 3 pipeline sees a valid cal.fits.
         with fits.open(cal_path) as out_hdul:
             out_hdul["SCI"].data = mock_sci.astype(np.float32)
-            out_hdul[0].header["MPSF_INJ"] = (True,       "mPSF mock injection applied")
-            out_hdul[0].header["MPSF_IPC"] = (add_ipc,    "IPC included in stpsf model")
-            out_hdul[0].header["MPSF_N"]   = (len(x_pos), "Number of injected sources")
-            out_hdul[0].header["MPSF_S2"]  = (False,      "Stage 2 bypassed for mock")
+            out_hdul[0].header["MPSF_INJ"] = (True,         "mPSF mock injection applied")
+            out_hdul[0].header["MPSF_IPC"] = (add_ipc,      "IPC included in stpsf model")
+            out_hdul[0].header["MPSF_N"]   = (len(x_pos),   "Number of injected sources")
+            out_hdul[0].header["MPSF_S2"]  = (False,        "Stage 2 bypassed for mock")
+            out_hdul[0].header["MPSF_OPD"] = (obs_date,     "OPD date used")
+            out_hdul[0].header["MPSF_SCL"] = (pixel_scale,  "Pixel scale used arcsec/px")
             out_name = out_dir / (cal_path.stem + "_mpsf.fits")
             out_hdul.writeto(out_name, overwrite=True)
 
