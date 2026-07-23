@@ -37,13 +37,26 @@ from astropy.wcs import WCS
 from astropy.coordinates import SkyCoord
 import astropy.units as u
 from scipy.ndimage import shift as ndimage_shift
+from scipy.stats import truncnorm
 from .psf_model import build_stpsf_psf, pixel_scale_from_header
 
 log = logging.getLogger(__name__)
 
 DEFAULT_NSIDE       = 2**12   # ~6 injection sites per NIRCam module
-DEFAULT_PEAK_COUNTS = 1000.0  # arbitrary injected peak (same units as SCI)
+DEFAULT_MAG_MEAN    = 20
+DEFAULT_MAG_SIGMA   = 1.0
+DEFAULT_MAG_LOW     = 19
+DEFAULT_MAG_HIGH    = 21
+DEFAULT_MAG_ZERO    = 28.0
+DEFAULT_TOTAL_FLUX  = 1500.0  # arbitrary injected total flux (same units as SCI)
 
+# ── Helper function ───────────────────────────────────────────────────────────
+
+def truncated_norm_random(low, high, mean, sigma):
+    a = (low - mean) / sigma
+    b = (high - mean) / sigma
+    target_mag = truncnorm.rvs(a, b, loc=mean, scale=sigma, size=1)[0]
+    return target_mag
 
 # ── HEALPix grid ──────────────────────────────────────────────────────────────
 
@@ -110,7 +123,12 @@ def inject_psf_at_position(
     psf: np.ndarray,
     x_cen: float,
     y_cen: float,
-    peak: float = DEFAULT_PEAK_COUNTS,
+    mag_zeropoint: float = DEFAULT_MAG_ZERO,
+    mag_mean: float = DEFAULT_MAG_MEAN,
+    mag_sigma: float = DEFAULT_MAG_SIGMA,
+    mag_low: float = DEFAULT_MAG_LOW,
+    mag_high: float = DEFAULT_MAG_HIGH,
+    total_flux: float | None = None,
 ) -> np.ndarray:
     """
     Inject a PSF stamp centred at sub-pixel position (x_cen, y_cen).
@@ -151,7 +169,12 @@ def inject_psf_at_position(
     psf_max = psf_shifted.max()
     if psf_max <= 0:
         return sci
-    psf_scaled = psf_shifted * (peak / psf_max)
+    
+    if total_flux is None:
+        target_mag = truncated_norm_random(mag_low, mag_high, mag_mean, mag_sigma)
+        total_flux = 10**((mag_zeropoint - target_mag) / 2.5)
+
+    psf_scaled = psf_shifted * total_flux
 
     # Image bounding box
     x0, x1 = ix - hw,      ix + hw + 1
@@ -174,7 +197,12 @@ def make_mock_exposures(
     filter_name: str,
     out_dir: str,
     nside: int           = DEFAULT_NSIDE,
-    peak_counts: float   = DEFAULT_PEAK_COUNTS,
+    mag_mean: float = DEFAULT_MAG_MEAN,
+    mag_sigma: float = DEFAULT_MAG_SIGMA,
+    mag_low: float = DEFAULT_MAG_LOW,
+    mag_high: float = DEFAULT_MAG_HIGH,
+    default_mag_zero: float = DEFAULT_MAG_ZERO,
+    total_flux:  float | None = None,
     fov_pixels: int      = 71,
     oversample: int      = 4,
     add_ipc: bool        = True,
@@ -247,9 +275,15 @@ def make_mock_exposures(
 
         # Pixel scale from PIXAR_A2 (exact, distortion-aware)
         pixel_scale = pixel_scale_from_header(sci_hdr)
+        try:
+            pixel_sr = sci_hdr['PIXAR_SR']
+            mag_zeropoint = -2.5 * np.log10((u.MJy / u.sr * (pixel_sr*u.sr**2) / (3631 * u.Jy)).cgs.value)
+        except KeyError:
+            mag_zeropoint = default_mag_zero  # fallback if PIXAR_SR is missing
+
         log.info(
-            "  detector=%s  date=%s  pixel_scale=%.5f arcsec/px",
-            detector, obs_date, pixel_scale,
+            "  detector=%s  date=%s  pixel_scale=%.5f arcsec/px mag_zero=%.2f",
+            detector, obs_date, pixel_scale, mag_zeropoint
         )
 
         wcs    = WCS(sci_hdr)
@@ -299,7 +333,8 @@ def make_mock_exposures(
             )
 
             mock_sci = inject_psf_at_position(
-                mock_sci, psf_arr, xc, yc, peak_counts
+                mock_sci, psf_arr, xc, yc, mag_zeropoint=mag_zeropoint, mag_mean=mag_mean,
+                mag_sigma=mag_sigma, mag_low=mag_low, mag_high=mag_high, total_flux=total_flux
             )
 
         # ── write mock cal.fits ────────────────────────────────────────────

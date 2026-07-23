@@ -65,7 +65,7 @@ def run_pipeline(
     lw_dir: str,
     asn_dir: str,
     wisp_dir: str,
-    stage3_dir: str,
+    #stage3_dir: str,
     mosaic_dir: str,
     rot_header = None,
     output_shape = None,
@@ -91,8 +91,6 @@ def run_pipeline(
     wisp_dir : str
         Directory of wisp template files (required by pipeline init,
         not used for mock frames).
-    stage3_dir : str
-        Working directory for Stage 3 outputs (aligned, outlier-rejected).
     mosaic_dir : str
         Output directory for the drizzled mock mosaic.
     pixfrac : float

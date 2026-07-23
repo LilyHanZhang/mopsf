@@ -26,12 +26,168 @@ from photutils.profiles import RadialProfile
 from photutils.centroids import centroid_2dg
 from typing import Optional, Tuple, List
 
+
+# ── star selection ───────────────────────────────────────────────────
+
+def star_pre_select(
+    catalog_file: str,
+    mag_bright_limit: float = 19.0,
+    mag_faint_limit: float = 21.0,
+    crossmatch: bool = False,
+    fwhm_arcsec: float = 0.13,
+    elong_max: float = 1.5,
+    class_star_min: float = 0.8
+) -> tuple:
+     
+    outtab = ascii.read(catalog_file)
+    outtab0 = outtab[
+        (outtab['elongation'] < elong_max) &
+        (outtab['class_star'] > class_star_min) &
+        (outtab['combined_flags'] < 2) &
+        (outtab['mag_auto'] > mag_bright_limit) &
+        (outtab['mag_auto'] < mag_faint_limit) 
+    ]
+    print(f"{len(outtab0)} sources satisfy stellar criteria.")
+    if crossmatch:
+        max_distance = 1.5*fwhm_arcsec*u.arcsec
+        #outtab1 = XMatch.query(cat1=outtab0, cat2='vizier:I/355/gaiadr3', 
+        #                       max_distance=max_distance, colRA1='ra', colDec1='dec')  # Gaia xmatch.
+        # implement when XMatch is down
+        center_ra = np.median(outtab['ra'])
+        center_dec = np.median(outtab['dec'])
+        search_radius = np.max([np.max(outtab['ra']) - center_ra, center_ra - np.min(outtab['ra']),
+                                 np.max(outtab['dec']) - center_dec, center_dec - np.min(outtab['dec'])]) * u.deg
+        Vizier.ROW_LIMIT = -1
+        result = Vizier.query_region(SkyCoord(ra=center_ra, dec=center_dec, unit='deg'),
+                              radius=search_radius, catalog='I/355/gaiadr3')
+        gaia_cat = result[0]
+        print(f'search radius = {search_radius.value:.2f} deg')
+        print(f'number of Gaia sources found = {len(gaia_cat)}')
+        c1 = SkyCoord(ra=outtab0['ra'], dec=outtab0['dec'], unit='deg')
+        c2 = SkyCoord(ra=gaia_cat['RA_ICRS'], dec=gaia_cat['DE_ICRS'], unit='deg')
+        idx, sep2d, _ = c1.match_to_catalog_sky(c2)
+        matched = sep2d < max_distance
+        outtab1 = outtab0[matched]
+        print(f"{len(outtab1)} sources after Gaia crossmatch.")
+    else:
+        outtab1 = outtab0
+    star_id = outtab1['label']
+    print(f"{len(outtab1)} sources satisfy stellar criteria.")
+    return outtab1, star_id
+
+
+def star_master_cat(catalog_list, star_id_list, filter_names,
+                     ra_col="ra", dec_col="dec",
+                     id_col="label", mag_col="mag_auto",
+                     match_radius=0.1 * u.arcsec,
+                     color_pair=("F115W", "F356W"), color_min=-1.7):
+    """
+    Restrict per-band star selections to those detected in ALL bands
+    (positional cross-match), optionally further cut on a color
+    (mag_blue - mag_red > color_min) if both bands in color_pair are present.
+
+    Parameters
+    ----------
+    catalog_list : list of astropy Table
+        One SExtractor catalog per band.
+    star_id_list : list of array-like
+        star_id_list[i] = the `id_col` values selected in catalog_list[i].
+    filter_names : list of str
+        Filter name for each entry in catalog_list, e.g. ["F090W","F115W",...].
+        Must be same length/order as catalog_list.
+    ra_col, dec_col : str
+        Sky coordinate columns used for cross-matching.
+    id_col : str
+        Per-catalog identifier column (default "label").
+    mag_col : str
+        Magnitude column used for the color cut (default "MAG_AUTO").
+    match_radius : astropy Quantity
+        Max separation to call detections in different bands the same star.
+    color_pair : (str, str)
+        (blue_filter, red_filter) — cut applied as mag(blue) - mag(red) > color_min,
+        i.e. F115W - F356W > -1.7 for the default pair. Only applied if both
+        filters are present in filter_names.
+    color_min : float
+        Minimum allowed color (blue - red).
+
+    Returns
+    -------
+    star_id_list_master : list of ndarray
+        For each band, the subset of star_id_list[i] passing all criteria.
+    catalog_master_list : list of astropy Table
+        For each band, the corresponding subset of catalog rows.
+    """
+    n_bands = len(catalog_list)
+    assert len(star_id_list) == n_bands
+    assert len(filter_names) == n_bands
+
+    # Subset each catalog to the selected star rows, build SkyCoords
+    sel_rows, coords = [], []
+    for cat, ids in zip(catalog_list, star_id_list):
+        mask = np.isin(np.asarray(cat[id_col]), np.asarray(ids))
+        sub = cat[mask]
+        sel_rows.append(sub)
+        coords.append(SkyCoord(ra=sub[ra_col], dec=sub[dec_col], unit=(u.deg, u.deg)))
+
+    # --- Step 1: full cross-match across ALL bands ---
+    # Use band 0 as the reference; a star survives only if it has a
+    # match (within match_radius) in every other band.
+    ref = coords[0]
+    n_ref = len(ref)
+    match_idx = np.full((n_bands, n_ref), -1, dtype=int)  # match_idx[j, k] = row index in band j matching ref star k
+    match_idx[0] = np.arange(n_ref)
+    keep_ref = np.ones(n_ref, dtype=bool)
+
+    for j in range(1, n_bands):
+        if n_ref == 0 or len(coords[j]) == 0:
+            keep_ref[:] = False
+            break
+        idx, sep2d, _ = ref.match_to_catalog_sky(coords[j])
+        good = sep2d < match_radius
+        keep_ref &= good
+        match_idx[j] = idx
+
+    # Indices (into each band's sel_rows/coords) of stars present in all bands
+    band_indices = [np.full(n_ref, -1, dtype=int) for _ in range(n_bands)]
+    for j in range(n_bands):
+        band_indices[j] = match_idx[j]
+
+    # Apply the "detected in every band" mask
+    final_keep = keep_ref.copy()
+
+    # --- Step 2: color cut, if both filters present ---
+    blue_name, red_name = color_pair
+    if blue_name in filter_names and red_name in filter_names:
+        b = filter_names.index(blue_name)
+        r = filter_names.index(red_name)
+
+        mag_blue = np.asarray(sel_rows[b][mag_col])[band_indices[b]]
+        mag_red = np.asarray(sel_rows[r][mag_col])[band_indices[r]]
+        color = mag_blue - mag_red
+
+        color_ok = np.isfinite(color) & (color > color_min)
+        final_keep &= color_ok
+
+    # --- Build outputs ---
+    star_id_list_master = []
+    catalog_master_list = []
+    for j in range(n_bands):
+        rows = band_indices[j][final_keep]
+        sub = sel_rows[j][rows]
+        star_id_list_master.append(np.asarray(sub[id_col]))
+        catalog_master_list.append(sub)
+
+    return star_id_list_master, catalog_master_list
+
+# ── build catalog & config ───────────────────────────────────────────────────
+
 def build_input_ldac(
     sci_image: str,
     catalog_file: str,
     seg_file: str,
     output_ldac: str,
     file_ext: int = 0,
+    star_id_pre: np.ndarray | None = None,
     mag_bright_limit: float = 19.0,
     mag_faint_limit: float = 21.0,
     cutout_size: int = 71,
@@ -128,46 +284,11 @@ def build_input_ldac(
     # 1. Read catalogue and select stars
     # --------------------------------------------------------------------
     outtab = ascii.read(catalog_file)
-    '''outtab1 = outtab[
-        (outtab['elongation'] < 1.5) &
-        (outtab['class_star'] > 0.93) &
-        (outtab['combined_flags'] < 2) &
-        (outtab['mag_auto'] > mag_bright_limit) &
-        (outtab['mag_auto'] < mag_faint_limit)
-    ]'''
-    outtab0 = outtab[
-        (outtab['elongation'] < 1.5) &
-        (outtab['class_star'] > 0.8) &
-        (outtab['combined_flags'] < 2) &
-        (outtab['mag_auto'] > mag_bright_limit) &
-        (outtab['mag_auto'] < mag_faint_limit) 
-    ]
-    print(f"{len(outtab0)} sources satisfy stellar criteria.")
-    if crossmatch:
-        max_distance = 1.5*fwhm_arcsec*u.arcsec
-        #outtab1 = XMatch.query(cat1=outtab0, cat2='vizier:I/355/gaiadr3', 
-        #                       max_distance=max_distance, colRA1='ra', colDec1='dec')  # Gaia xmatch.
-        # implement when XMatch is down
-        center_ra = np.median(outtab['ra'])
-        center_dec = np.median(outtab['dec'])
-        search_radius = np.max([np.max(outtab['ra']) - center_ra, center_ra - np.min(outtab['ra']),
-                                 np.max(outtab['dec']) - center_dec, center_dec - np.min(outtab['dec'])]) * u.deg
-        Vizier.ROW_LIMIT = -1
-        result = Vizier.query_region(SkyCoord(ra=center_ra, dec=center_dec, unit='deg'),
-                              radius=search_radius, catalog='I/355/gaiadr3')
-        gaia_cat = result[0]
-        print(f'search radius = {search_radius.value:.2f} deg')
-        print(f'number of Gaia sources found = {len(gaia_cat)}')
-        c1 = SkyCoord(ra=outtab0['ra'], dec=outtab0['dec'], unit='deg')
-        c2 = SkyCoord(ra=gaia_cat['RA_ICRS'], dec=gaia_cat['DE_ICRS'], unit='deg')
-        idx, sep2d, _ = c1.match_to_catalog_sky(c2)
-        matched = sep2d < max_distance
-        outtab1 = outtab0[matched]
-        print(f"{len(outtab1)} sources after Gaia crossmatch.")
+    if star_id_pre is not None:
+        outtab1 = outtab[np.isin(outtab['label'], star_id_pre)]
     else:
-        outtab1 = outtab0
-    print(f"{len(outtab1)} sources satisfy stellar criteria.")
-
+        outtab1, _ = star_pre_select(catalog_file,crossmatch=crossmatch, 
+                                     fwhm_arcsec=fwhm_arcsec)
     # --------------------------------------------------------------------
     # 2. Extract coordinates (1‑indexed)
     # --------------------------------------------------------------------

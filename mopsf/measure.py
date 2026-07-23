@@ -37,7 +37,7 @@ DEFAULT_CUTOUT_SIZE  = 65    # pixels — odd so the star is centred
 DEFAULT_OVERSAMPLING = 4
 DEFAULT_MAX_ITERS    = 10
 DEFAULT_NSIDE        = 2**12
-DEFAULT_MIN_FLUX_FRAC = 0.5  # drop stars with peak < this × median peak
+DEFAULT_MASK_AREA    = 0.5  # drop stars with peak < this × median peak
 
 
 # ── mosaic loading ────────────────────────────────────────────────────────────
@@ -119,9 +119,9 @@ def find_mosaic(mosaic_dir: str, filter_name: str) -> str:
 # ── star filtering ────────────────────────────────────────────────────────────
 
 def _filter_low_flux(
-    stars_tbl: Table,
-    sci: np.ndarray,
-    cutout_size: int,
+        stars_tbl: Table,
+        sci: np.ndarray,
+        cutout_size: int,
     min_flux_frac: float,
 ) -> Table:
     """Remove injection sites where peak flux is anomalously low."""
@@ -147,6 +147,22 @@ def _filter_low_flux(
         )
     return stars_tbl[good]
 
+def _filter_stars_in_mask(
+        stars_tbl: Table,
+        sci: np.ndarray,
+        wht: np.ndarray,
+        threshold: float,
+        cutout_size: int,
+) -> Table:
+    """Remove stars with > threshold masked"""
+    tot_mask = (~np.isfinite(sci)) | (wht == 0)
+    xmin_tbl = np.floor(stars_tbl["x"]).astype(int) - cutout_size // 2
+    xmax_tbl = np.floor(stars_tbl["x"]).astype(int) + cutout_size // 2 + 1
+    ymin_tbl = np.floor(stars_tbl["y"]).astype(int) - cutout_size // 2
+    ymax_tbl = np.floor(stars_tbl["y"]).astype(int) + cutout_size // 2 + 1
+    mask_frac = np.array([np.sum(tot_mask[ymin:ymax, xmin:xmax]) / ((ymax - ymin) * (xmax - xmin))
+                 for xmin, xmax, ymin, ymax in zip(xmin_tbl, xmax_tbl, ymin_tbl, ymax_tbl)])
+    return stars_tbl[mask_frac < threshold]
 
 # ── main ePSF builder ─────────────────────────────────────────────────────────
 
@@ -158,7 +174,7 @@ def build_epsf(
     oversampling: int      = DEFAULT_OVERSAMPLING,
     max_iters: int         = DEFAULT_MAX_ITERS,
     smoothing_kernel: str  = "quartic",
-    min_flux_frac: float   = DEFAULT_MIN_FLUX_FRAC,
+    threshold: float   = DEFAULT_MASK_AREA,
     save_path: str | None  = None,
     save_stars: str | None = None,
 ) -> tuple:
@@ -224,7 +240,7 @@ def build_epsf(
     stars_tbl = Table({"x": x_pos, "y": y_pos})
 
     # ── filter bad sites ─────────────────────────────────────────────────────
-    stars_tbl = _filter_low_flux(stars_tbl, sci, cutout_size, min_flux_frac)
+    stars_tbl = _filter_stars_in_mask(stars_tbl, sci, wht, threshold=threshold, cutout_size=cutout_size)
     log.info("Building ePSF from %d stars", len(stars_tbl))
 
     if len(stars_tbl) < 5:

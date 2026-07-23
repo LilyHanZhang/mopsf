@@ -72,13 +72,9 @@ git clone https://github.com/zezhong233/JWST-NIRCam-pipeline
 
 ```
 main_dir/
-├── stage2/            # real _cal.fits files  ← input
-├── stage3/            # real aligned files
+├── stage3/            # real _cal.fits files  ← input
 ├── mosaic/            # real mosaics
-├── asn/               # association JSON files
-├── wisp_templates/    # wisp templates
 ├── mpsf_injected/     # mock cal.fits with injected PSFs  ← Step 1 output
-├── mpsf_stage3/       # aligned mock files                ← Step 2 output
 ├── mpsf_mosaic/       # drizzled mock mosaic              ← Step 2 output
 └── mpsf_output/       # final ePSF FITS + QA plot         ← Step 3 output
 ```
@@ -97,31 +93,11 @@ Edit `MAIN_DIR`, `FILTER`, and `PIXEL_SCALE` at the top of `run_mpsf.py`, then:
 python run_mpsf.py
 ```
 
-Or call individual modules from your own script:
+Or equivalently run `run_mpsf.ipynb` (including plotting / visualization).
 
-```python
-from mopsf.psf_model import build_psf_cache
-from mopsf.inject    import make_mock_exposures
-from mopsf.pipeline  import run_pipeline
-from mopsf.measure   import build_epsf, find_mosaic
+Empirical PSF could be constructed using `empirical_cat.ipynb` and then `empirical_psf.ipynb`.
 
-# Step 1 — build stpsf PSFs and inject into mock cal.fits
-
-mock_files = make_mock_exposures(cal_files = cal_files, filter_name = "F277W", out_dir = "mpsf_injected/")
-
-# Step 2 — Stage 3 + resample (Stage 2 is skipped)
-run_pipeline(mock_files, filter_name="277W", ..., pixfrac=0.75)
-
-# Step 3 — measure the effective mosaic PSF
-epsf, fitted_stars, stars_tbl = build_epsf(
-    mosaic_path = "mpsf_mosaic/mosaic_i2d.fits",
-    filter_name = "F277W",
-    save_path   = "mpsf_output/F277W_mpsf.fits",
-)
-```
-
-A more comprehensive procedure is included in `run_mpsf.ipynb`.
-
+Comparison between stage3 empirical PSF (before drizzling) and WebbPSF could be found in `stage3_psf.ipynb`.
 ---
 
 ## Package structure
