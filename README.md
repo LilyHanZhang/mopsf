@@ -98,6 +98,7 @@ Or equivalently run `run_mpsf.ipynb` (including plotting / visualization).
 Empirical PSF could be constructed using `empirical_cat.ipynb` and then `empirical_psf.ipynb`.
 
 Comparison between stage3 empirical PSF (before drizzling) and WebbPSF could be found in `stage3_psf.ipynb`.
+
 ---
 
 ## Package structure
