@@ -1,22 +1,12 @@
 """
 mopsf.pipeline
 --------------
-Run Stage 3 (alignment + outlier rejection) and resample (drizzle) on
+Run resample (drizzle) on
 the mock cal.fits files produced by :mod:`mopsf.inject`.
-
-Stage 2 is intentionally skipped
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 The mock cal.fits files already contain:
   - Synthetic PSF-only SCI data on a zero background
   - Real WCS, DQ, and ERR copied from the genuine cal.fits
-
-There is no real signal to flat-field or flux-calibrate, and no wisp
-artefacts to subtract.  Running Stage 2 on these files would be a no-op
-at best and could corrupt the zero background at worst.
-
-We therefore feed the mock files directly into Stage 3
-(TweakReg / OutlierDetection) and then resample with the same pixfrac
-used on the science data.
 """
 
 from __future__ import annotations
